@@ -4,6 +4,7 @@ import { judgementProfiles, rhythmOptions } from '../data/rhythmOptions.js';
 
 defineProps({
   bpm: Number,
+  metronomeVolumePercent: Number,
   thresholdPercent: Number,
   judgementMode: String,
   measures: Array,
@@ -13,6 +14,7 @@ defineProps({
 
 defineEmits([
   'update:bpm',
+  'update:metronomeVolumePercent',
   'update:thresholdPercent',
   'update:judgementMode',
   'select-measure',
@@ -66,6 +68,16 @@ const judgementOptions = computed(() =>
         <label class="field">
           <span>BPM: {{ bpm }}</span>
           <input type="range" min="50" max="220" :value="bpm" @input="$emit('update:bpm', Number($event.target.value))" />
+        </label>
+        <label class="field">
+          <span>节拍器音量: {{ metronomeVolumePercent }}%</span>
+          <input
+            type="range"
+            min="0"
+            max="300"
+            :value="metronomeVolumePercent"
+            @input="$emit('update:metronomeVolumePercent', Number($event.target.value))"
+          />
         </label>
         <label class="field">
           <span>麦克风阈值: {{ thresholdPercent }}%</span>

@@ -8,6 +8,8 @@ import { useTrainerState } from './composables/useTrainerState.js';
 const state = useTrainerState();
 
 const audioCtx = ref(null);
+const metronomeBus = ref(null);
+const metronomeMasterGain = ref(null);
 const timerId = ref(null);
 const micStream = ref(null);
 const micAnimationFrameId = ref(null);
@@ -25,6 +27,7 @@ const sessionElapsedSec = ref(0);
 const detectedHitCount = ref(0);
 const ignoredHitCount = ref(0);
 const matchedCycleNoteKeys = ref(new Set());
+const metronomeVolumePercent = ref(100);
 
 const thresholdPercent = computed({
   get: () => Math.round(state.amplitudeThreshold.value * 100),
@@ -100,25 +103,57 @@ function getPlayheadState(time) {
 }
 
 function playQuarterMetronomeClick(beatIndex, time) {
-  if (!audioCtx.value) return;
+  if (!audioCtx.value || !metronomeBus.value) return;
 
   const osc = audioCtx.value.createOscillator();
   const gain = audioCtx.value.createGain();
   osc.connect(gain);
-  gain.connect(audioCtx.value.destination);
+  gain.connect(metronomeBus.value);
 
   const isMeasureStart = beatIndex % 4 === 0;
   if (isMeasureStart) {
-    osc.frequency.setValueAtTime(1400, time);
-    gain.gain.setValueAtTime(0.18, time);
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(1760, time);
+    gain.gain.setValueAtTime(0.65, time);
   } else {
-    osc.frequency.setValueAtTime(750, time);
-    gain.gain.setValueAtTime(0.1, time);
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(1440, time);
+    gain.gain.setValueAtTime(0.52, time);
   }
 
-  gain.gain.exponentialRampToValueAtTime(0.001, time + 0.04);
+  gain.gain.exponentialRampToValueAtTime(0.001, time + 0.055);
   osc.start(time);
-  osc.stop(time + 0.05);
+  osc.stop(time + 0.065);
+}
+
+function metronomeVolumeToGain(volumePercent) {
+  const clamped = Math.max(0, Math.min(300, volumePercent));
+  const normalized = Math.min(clamped, 100) / 100;
+  const baseGain = 0.08 + normalized * normalized * 5.2;
+
+  if (clamped <= 100) return baseGain;
+
+  const extraBoost = (clamped - 100) / 200;
+  return baseGain * (1 + 2 * Math.pow(extraBoost, 1.2));
+}
+
+function ensureMetronomeBus() {
+  if (!audioCtx.value || metronomeBus.value) return;
+
+  const compressor = audioCtx.value.createDynamicsCompressor();
+  compressor.threshold.setValueAtTime(-30, audioCtx.value.currentTime);
+  compressor.knee.setValueAtTime(24, audioCtx.value.currentTime);
+  compressor.ratio.setValueAtTime(4, audioCtx.value.currentTime);
+  compressor.attack.setValueAtTime(0.002, audioCtx.value.currentTime);
+  compressor.release.setValueAtTime(0.16, audioCtx.value.currentTime);
+
+  const masterGain = audioCtx.value.createGain();
+  masterGain.gain.setValueAtTime(metronomeVolumeToGain(metronomeVolumePercent.value), audioCtx.value.currentTime);
+
+  compressor.connect(masterGain);
+  masterGain.connect(audioCtx.value.destination);
+  metronomeBus.value = compressor;
+  metronomeMasterGain.value = masterGain;
 }
 
 function processLiveDrumHit(hitTime) {
@@ -319,6 +354,7 @@ async function toggleRun() {
     if (!audioCtx.value) {
       audioCtx.value = new (window.AudioContext || window.webkitAudioContext)();
     }
+    ensureMetronomeBus();
 
     await initMicrophoneStream();
     if (audioCtx.value.state === 'suspended') {
@@ -366,6 +402,15 @@ watch(
   }
 );
 
+watch(metronomeVolumePercent, (value) => {
+  if (!audioCtx.value || !metronomeMasterGain.value) return;
+
+  const now = audioCtx.value.currentTime;
+  metronomeMasterGain.value.gain.cancelScheduledValues(now);
+  metronomeMasterGain.value.gain.setValueAtTime(metronomeMasterGain.value.gain.value, now);
+  metronomeMasterGain.value.gain.linearRampToValueAtTime(metronomeVolumeToGain(value), now + 0.03);
+});
+
 onBeforeUnmount(() => {
   if (timerId.value) clearTimeout(timerId.value);
   if (micAnimationFrameId.value) cancelAnimationFrame(micAnimationFrameId.value);
@@ -378,12 +423,14 @@ onBeforeUnmount(() => {
   <main class="page">
     <ControlPanel
       :bpm="state.bpm.value"
+      :metronome-volume-percent="metronomeVolumePercent"
       :threshold-percent="thresholdPercent"
       :judgement-mode="state.judgementMode.value"
       :measures="state.measures.value"
       :selected-measure-index="state.selectedMeasureIndex.value"
       :is-running="state.isRunning.value"
       @update:bpm="state.bpm.value = $event"
+      @update:metronome-volume-percent="metronomeVolumePercent = $event"
       @update:threshold-percent="thresholdPercent = $event"
       @update:judgement-mode="state.judgementMode.value = $event"
       @select-measure="state.selectedMeasureIndex.value = $event"
