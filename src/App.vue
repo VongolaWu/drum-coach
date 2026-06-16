@@ -342,7 +342,19 @@ async function toggleRun() {
     renderLoop();
   } catch (error) {
     micStatus.value = '麦克风启动失败';
-    realtimeFeedback.value = error instanceof Error ? error.message : '无法启动麦克风。';
+    if (error instanceof DOMException) {
+      if (error.name === 'NotAllowedError') {
+        realtimeFeedback.value = '麦克风权限被拒绝。请在浏览器站点设置里允许麦克风后重试。';
+      } else if (error.name === 'NotFoundError') {
+        realtimeFeedback.value = '没有检测到可用的麦克风设备。';
+      } else if (error.name === 'SecurityError') {
+        realtimeFeedback.value = '当前页面不是安全上下文。请改用 HTTPS，或在本机 localhost 打开页面。';
+      } else {
+        realtimeFeedback.value = error.message || '无法启动麦克风。';
+      }
+    } else {
+      realtimeFeedback.value = error instanceof Error ? error.message : '无法启动麦克风。';
+    }
     state.isRunning.value = false;
   }
 }

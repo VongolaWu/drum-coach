@@ -7,12 +7,16 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "generate:ssl": "bash ./scripts/generate-local-ssl.sh",
+    "setup:http": "bash ./setup-http-nginx.sh",
+    "setup:https:public": "bash ./scripts/setup-public-https.sh",
     "deploy:local": "powershell -ExecutionPolicy Bypass -File ./scripts/deploy-local.ps1"
   },
   "dependencies": {
     "vue": "^3.5.17"
   },
   "devDependencies": {
+    "@vitejs/plugin-basic-ssl": "^1.2.0",
     "@vitejs/plugin-vue": "^5.2.4",
     "vite": "^5.4.19"
   }
