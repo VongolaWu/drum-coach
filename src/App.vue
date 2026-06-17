@@ -25,6 +25,7 @@ const inputLevel = ref(0);
 const activePlayhead = ref(null);
 const sessionElapsedSec = ref(0);
 const sessionPhase = ref('idle');
+const currentStep = ref('setup');
 const detectedHitCount = ref(0);
 const ignoredHitCount = ref(0);
 const matchedCycleNoteKeys = ref(new Set());
@@ -439,6 +440,28 @@ function analyzeRecordedSession() {
   offsetMs.value = bestResult.records.length ? bestResult.records[bestResult.records.length - 1].offset : null;
 }
 
+function resetSession() {
+  currentStep.value = 'setup';
+  sessionPhase.value = 'idle';
+  state.isRunning.value = false;
+  activePlayhead.value = null;
+  state.clearVisualStates();
+  state.userHitRecords.value = [];
+  matchedCycleNoteKeys.value = new Set();
+  recentMetronomeClickTimes.value = [];
+  metronomeClickHistory.value = [];
+  rawCapturedHits.value = [];
+  detectedHitCount.value = 0;
+  ignoredHitCount.value = 0;
+  analyzedExpectedCount.value = 0;
+  analyzedLatencyMs.value = null;
+  analyzedMeasures.value = [];
+  analyzedNoteVisualStates.value = {};
+  sessionElapsedSec.value = 0;
+  realtimeFeedback.value = '等待训练开始…';
+  offsetMs.value = null;
+}
+
 function processLiveDrumHit(hitTime) {
   if (!state.isRunning.value) return;
 
@@ -734,6 +757,7 @@ async function toggleRun() {
   if (state.isRunning.value) {
     state.isRunning.value = false;
     sessionPhase.value = 'idle';
+    currentStep.value = 'setup';
     realtimeFeedback.value = '训练已停止。';
     if (timerId.value) clearTimeout(timerId.value);
     if (sessionStopTimeoutId.value) clearTimeout(sessionStopTimeoutId.value);
@@ -756,6 +780,7 @@ async function toggleRun() {
     }
 
     state.isRunning.value = true;
+    currentStep.value = 'training';
     sessionPhase.value = state.warmupMeasures.value > 0 ? 'warmup' : 'recording';
     state.clearVisualStates();
     state.userHitRecords.value = [];
@@ -790,6 +815,7 @@ async function toggleRun() {
       recentMetronomeClickTimes.value = [];
       sessionStopTimeoutId.value = null;
       sessionPhase.value = 'done';
+      currentStep.value = 'results';
     }, Math.max(0, (recordingEndTime.value - audioCtx.value.currentTime + 0.12) * 1000));
   } catch (error) {
     micStatus.value = '麦克风启动失败';
@@ -808,6 +834,7 @@ async function toggleRun() {
     }
     state.isRunning.value = false;
     sessionPhase.value = 'idle';
+    currentStep.value = 'setup';
   }
 }
 
@@ -838,66 +865,101 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="page">
-    <ControlPanel
-      :bpm="state.bpm.value"
-      :metronome-volume-percent="metronomeVolumePercent"
-      :threshold-percent="thresholdPercent"
-      :judgement-mode="state.judgementMode.value"
-      :measures="state.measures.value"
-      :warmup-measures="state.warmupMeasures.value"
-      :recording-measures="state.recordingMeasures.value"
-      :selected-measure-index="state.selectedMeasureIndex.value"
-      :is-running="state.isRunning.value"
-      @update:bpm="state.bpm.value = $event"
-      @update:metronome-volume-percent="metronomeVolumePercent = $event"
-      @update:threshold-percent="thresholdPercent = $event"
-      @update:judgement-mode="state.judgementMode.value = $event"
-      @update:warmup-measures="state.warmupMeasures.value = $event"
-      @update:recording-measures="state.recordingMeasures.value = $event"
-      @select-measure="state.selectedMeasureIndex.value = $event"
-      @update-rhythm="state.updateBeatRhythm"
-      @add-measure="state.addMeasure"
-      @delete-measure="state.deleteSelectedMeasure"
-      @toggle-run="toggleRun"
-    />
-
-    <section class="status-grid">
-      <div class="status-card">
-        <div class="status-label">麦克风状态</div>
-        <div class="status-value">{{ micStatus }}</div>
-      </div>
-      <div class="status-card">
-        <div class="status-label">输入电平</div>
-        <div class="status-value mono">{{ inputLevel }}%</div>
-      </div>
-      <div class="status-card">
-        <div class="status-label">实时反馈</div>
-        <div class="status-value">{{ realtimeFeedback }}</div>
-      </div>
-      <div class="status-card">
-        <div class="status-label">最近偏差</div>
-        <div class="status-value mono">{{ offsetMs == null ? '-- ms' : `${offsetMs > 0 ? '+' : ''}${offsetMs} ms` }}</div>
-      </div>
+    <section v-if="currentStep === 'setup'" class="step-shell">
+      <ControlPanel
+        :bpm="state.bpm.value"
+        :metronome-volume-percent="metronomeVolumePercent"
+        :threshold-percent="thresholdPercent"
+        :judgement-mode="state.judgementMode.value"
+        :measures="state.measures.value"
+        :warmup-measures="state.warmupMeasures.value"
+        :recording-measures="state.recordingMeasures.value"
+        :selected-measure-index="state.selectedMeasureIndex.value"
+        :is-running="state.isRunning.value"
+        :session-phase="sessionPhase"
+        :session-toolbar-text="''"
+        @update:bpm="state.bpm.value = $event"
+        @update:metronome-volume-percent="metronomeVolumePercent = $event"
+        @update:threshold-percent="thresholdPercent = $event"
+        @update:judgement-mode="state.judgementMode.value = $event"
+        @update:warmup-measures="state.warmupMeasures.value = $event"
+        @update:recording-measures="state.recordingMeasures.value = $event"
+        @select-measure="state.selectedMeasureIndex.value = $event"
+        @update-rhythm="state.updateBeatRhythm"
+        @add-measure="state.addMeasure"
+        @delete-measure="state.deleteSelectedMeasure"
+        @toggle-run="toggleRun"
+      />
     </section>
 
-    <StaffCanvas
-      :bpm="state.bpm.value"
-      :geometry="state.geometry"
-      :measures="displayedMeasures"
-      :note-visual-states="displayedNoteVisualStates"
-      :active-playhead="activePlayhead"
-      :is-running="state.isRunning.value"
-    />
+    <section v-else-if="currentStep === 'training'" class="training-shell">
+      <header class="training-header card">
+        <div>
+          <div class="training-kicker">训练中</div>
+          <h2>{{ sessionPhase === 'warmup' ? '热身准备' : sessionPhase === 'recording' ? '正在录音' : '正在分析' }}</h2>
+          <p>建议手机横屏使用，尽量让当前五线谱完整显示。</p>
+        </div>
+        <button class="primary-btn" type="button" @click="toggleRun">停止训练</button>
+      </header>
 
-    <ReportPanel
-      :report="report"
-      :judgement-profile="state.judgementProfile.value"
-      :judgement-label="judgementLabel"
-      :recording-measures="state.recordingMeasures.value"
-      :analyzed-latency-ms="analyzedLatencyMs"
-      :measure-summaries="measureSummaries"
-      :coaching-summary="coachingSummary"
-    />
+      <section class="status-grid compact-status">
+        <div class="status-card">
+          <div class="status-label">麦克风</div>
+          <div class="status-value">{{ micStatus }}</div>
+        </div>
+        <div class="status-card">
+          <div class="status-label">输入电平</div>
+          <div class="status-value mono">{{ inputLevel }}%</div>
+        </div>
+        <div class="status-card">
+          <div class="status-label">当前状态</div>
+          <div class="status-value">{{ realtimeFeedback }}</div>
+        </div>
+      </section>
+
+      <section class="practice-viewport training-viewport">
+        <StaffCanvas
+          :bpm="state.bpm.value"
+          :geometry="state.geometry"
+          :measures="state.measures.value"
+          :note-visual-states="state.noteVisualStates"
+          :active-playhead="activePlayhead"
+          :is-running="true"
+        />
+      </section>
+    </section>
+
+    <section v-else class="results-shell">
+      <header class="results-header card">
+        <div>
+          <div class="training-kicker">训练结果</div>
+          <h2>录音分析完成</h2>
+          <p>{{ realtimeFeedback }}</p>
+        </div>
+        <button class="primary-btn" type="button" @click="resetSession">重新开始</button>
+      </header>
+
+      <section class="practice-viewport results-viewport">
+        <StaffCanvas
+          :bpm="state.bpm.value"
+          :geometry="state.geometry"
+          :measures="displayedMeasures"
+          :note-visual-states="displayedNoteVisualStates"
+          :active-playhead="null"
+          :is-running="false"
+        />
+      </section>
+
+      <ReportPanel
+        :report="report"
+        :judgement-profile="state.judgementProfile.value"
+        :judgement-label="judgementLabel"
+        :recording-measures="state.recordingMeasures.value"
+        :analyzed-latency-ms="analyzedLatencyMs"
+        :measure-summaries="measureSummaries"
+        :coaching-summary="coachingSummary"
+      />
+    </section>
   </main>
 </template>
 
@@ -906,5 +968,77 @@ onBeforeUnmount(() => {
   width: min(1200px, calc(100vw - 32px));
   margin: 0 auto;
   padding: 24px 0 48px;
+}
+
+.step-shell,
+.training-shell,
+.results-shell {
+  display: grid;
+  gap: 16px;
+}
+
+.training-shell,
+.results-shell {
+  width: min(1360px, calc(100vw - 16px));
+  margin: 0 auto;
+}
+
+.training-header,
+.results-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  padding: 18px;
+}
+
+.training-header h2,
+.results-header h2 {
+  margin: 4px 0 0;
+}
+
+.training-header p,
+.results-header p {
+  margin: 8px 0 0;
+  color: #a1a1aa;
+  line-height: 1.5;
+}
+
+.training-kicker {
+  color: #a1a1aa;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.practice-viewport {
+  scroll-margin-top: 16px;
+}
+
+.training-viewport,
+.results-viewport {
+  background: rgba(24, 24, 27, 0.82);
+  border: 1px solid rgba(63, 63, 70, 0.7);
+  border-radius: 24px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+}
+
+.compact-status {
+  margin: 0;
+}
+
+@media (max-width: 900px) {
+  .page,
+  .training-shell,
+  .results-shell {
+    width: calc(100vw - 12px);
+  }
+
+  .training-header,
+  .results-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
 }
 </style>

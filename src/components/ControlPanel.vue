@@ -11,7 +11,9 @@ defineProps({
   warmupMeasures: Number,
   recordingMeasures: Number,
   selectedMeasureIndex: Number,
-  isRunning: Boolean
+  isRunning: Boolean,
+  sessionPhase: String,
+  sessionToolbarText: String
 });
 
 defineEmits([
@@ -34,11 +36,11 @@ const judgementOptions = computed(() =>
 </script>
 
 <template>
-  <section class="panel">
+  <section class="panel" :class="{ 'mobile-session-panel': isRunning }">
     <header class="panel-header">
       <div>
         <h1>鼓点节拍训练器</h1>
-        <p>这是迁移到 Vue 后的整理版本。现在我们先把训练、收音、可视化和报告拆开，后面继续逐步提高检测准确度。</p>
+        <p>设置节奏、热身和录音小节后开始训练。录音结束会自动生成逐小节结果和练习建议。</p>
       </div>
       <button class="primary-btn" type="button" @click="$emit('toggle-run')">
         <i :class="isRunning ? 'fa-solid fa-stop' : 'fa-solid fa-play'"></i>
@@ -46,7 +48,13 @@ const judgementOptions = computed(() =>
       </button>
     </header>
 
-    <div class="grid">
+    <div v-if="isRunning" class="mobile-session-toolbar">
+      <div class="mobile-session-title">训练进行中</div>
+      <div class="mobile-session-meta mono">{{ sessionToolbarText }}</div>
+      <div class="mobile-session-meta mono">BPM {{ bpm }}</div>
+    </div>
+
+    <div class="grid" :class="{ 'mobile-hidden-while-running': isRunning }">
       <div class="card">
         <div class="card-title">小节序列</div>
         <div class="measure-list">
@@ -128,7 +136,7 @@ const judgementOptions = computed(() =>
       </div>
     </div>
 
-    <div class="card">
+    <div class="card" :class="{ 'mobile-hidden-while-running': isRunning }">
       <div class="card-title">当前小节编辑</div>
       <div class="beat-grid">
         <label v-for="beatIndex in 4" :key="beatIndex" class="field">
@@ -154,5 +162,43 @@ const judgementOptions = computed(() =>
   color: #a1a1aa;
   font-size: 13px;
   line-height: 1.5;
+}
+
+.mobile-session-toolbar {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .mobile-session-panel .panel-header p {
+    display: none;
+  }
+
+  .mobile-session-panel .panel-header {
+    margin-bottom: 0;
+  }
+
+  .mobile-session-toolbar {
+    display: grid;
+    gap: 6px;
+    margin-top: 14px;
+    padding: 12px 14px;
+    border-radius: 16px;
+    background: rgba(17, 24, 39, 0.72);
+    border: 1px solid rgba(63, 63, 70, 0.7);
+  }
+
+  .mobile-session-title {
+    font-weight: 700;
+    color: #f4f4f5;
+  }
+
+  .mobile-session-meta {
+    color: #a1a1aa;
+    font-size: 13px;
+  }
+
+  .mobile-hidden-while-running {
+    display: none;
+  }
 }
 </style>

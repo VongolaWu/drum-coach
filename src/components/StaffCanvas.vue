@@ -8,7 +8,11 @@ const props = defineProps({
   measures: Array,
   noteVisualStates: Object,
   activePlayhead: Object,
-  isRunning: Boolean
+  isRunning: Boolean,
+  measureNumberOffset: {
+    type: Number,
+    default: 0
+  }
 });
 
 const canvasRef = ref(null);
@@ -210,12 +214,15 @@ function draw() {
   if (!canvas || !host) return;
 
   const dpr = window.devicePixelRatio || 1;
-  const minimumWidth = window.innerWidth <= 640 ? 760 : 960;
-  const width = Math.max(host.clientWidth || minimumWidth, minimumWidth);
+  const isCompact = window.innerWidth <= 900;
+  const hostStyle = window.getComputedStyle(host);
+  const horizontalPadding =
+    Number.parseFloat(hostStyle.paddingLeft || '0') + Number.parseFloat(hostStyle.paddingRight || '0');
+  const width = Math.max((host.clientWidth || 0) - horizontalPadding, 320);
   const height = requiredHeight.value;
   canvas.width = width * dpr;
   canvas.height = height * dpr;
-  canvas.style.width = `${width}px`;
+  canvas.style.width = '100%';
   canvas.style.height = `${height}px`;
 
   const ctx = canvas.getContext('2d');
@@ -224,9 +231,10 @@ function draw() {
 
   const localGeometry = {
     ...props.geometry,
-    endX: width - 50,
-    beatWidth: (width - 50 - props.geometry.startX) / 4
+    startX: isCompact ? 76 : props.geometry.startX,
+    endX: width - (isCompact ? 24 : 50)
   };
+  localGeometry.beatWidth = (localGeometry.endX - localGeometry.startX) / 4;
 
   props.measures.forEach((measure, measureIndex) => {
     const staffY = props.geometry.staffBaseYOffset + measureIndex * props.geometry.staffHeight;
@@ -237,8 +245,8 @@ function draw() {
     for (let i = -2; i <= 2; i += 1) {
       const lineY = staffY + i * lineSpacing;
       ctx.beginPath();
-      ctx.moveTo(localGeometry.startX - 50, lineY);
-      ctx.lineTo(localGeometry.endX + 30, lineY);
+      ctx.moveTo(localGeometry.startX - (isCompact ? 28 : 50), lineY);
+      ctx.lineTo(localGeometry.endX + (isCompact ? 14 : 30), lineY);
       ctx.stroke();
     }
 
@@ -252,7 +260,7 @@ function draw() {
 
     ctx.fillStyle = '#3f3f46';
     ctx.font = 'bold 11px "JetBrains Mono", monospace';
-    ctx.fillText(`M${measureIndex + 1}`, localGeometry.startX - 50, staffY - 26);
+    ctx.fillText(`M${props.measureNumberOffset + measureIndex + 1}`, localGeometry.startX - (isCompact ? 28 : 50), staffY - 26);
 
     const beatDuration = 60 / props.bpm;
     for (let beatIndex = 0; beatIndex < 4; beatIndex += 1) {
