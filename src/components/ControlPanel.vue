@@ -39,8 +39,8 @@ const judgementOptions = computed(() =>
   <section class="panel" :class="{ 'mobile-session-panel': isRunning }">
     <header class="panel-header">
       <div>
-        <h1>鼓点节拍训练器</h1>
-        <p>设置节奏、热身和录音小节后开始训练。录音结束会自动生成逐小节结果和练习建议。</p>
+        <h1>鼓点节拍训练器 - 山海音乐特供版</h1>
+        <p>让我们荡起鼓棒，小手法推开波浪。设置节奏、热身和录音小节后开始训练。录音结束会自动生成逐小节结果和练习建议。</p>
       </div>
       <button class="primary-btn" type="button" @click="$emit('toggle-run')">
         <i :class="isRunning ? 'fa-solid fa-stop' : 'fa-solid fa-play'"></i>

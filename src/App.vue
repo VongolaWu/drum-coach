@@ -40,6 +40,7 @@ const analyzedExpectedCount = ref(0);
 const analyzedLatencyMs = ref(null);
 const analyzedMeasures = ref([]);
 const analyzedNoteVisualStates = ref({});
+const coachingSeed = ref(0);
 
 const thresholdPercent = computed({
   get: () => Math.round(state.amplitudeThreshold.value * 100),
@@ -145,19 +146,71 @@ const measureSummaries = computed(() => {
 
 const coachingSummary = computed(() => {
   if (!state.userHitRecords.value.length || !measureSummaries.value.length) {
-    return ['完成录音后，这里会给出按小节整理的练习建议。'];
+    return ['完成录音后，这里会掉落一份带点性格的小结，告诉你下一轮往哪儿发力。'];
   }
 
+  const pickVariant = (items, offset = 0) => items[(coachingSeed.value + offset) % items.length];
+  const stylePackIndex = coachingSeed.value % 4;
+  const openerPacks = [
+    {
+      high: ['呦！不错嘛，这一轮已经很有样子了。', '可以啊，今天这手感明显在线。', '这开局就挺争气，节奏站得住。'],
+      mid: ['有点意思，这一轮已经开始进入状态了。', '不错，基础盘已经稳住一大半了。', '这轮打得挺有希望，再拧一拧就更顺了。'],
+      low: ['别慌，这一轮主要是在摸清你的节奏脾气。', '今天先别跟自己较劲，我们先把路走顺。', '这轮像是在热身你的手感，真正的好戏还在后面。']
+    },
+    {
+      high: ['哎呦，今天这是要上分啊。', '这手感，已经有点像偷偷开挂了。', '不错，这轮打得像是偷偷练过。'],
+      mid: ['可以，可以，这轮已经开始有那个味儿了。', '别说，还真让你打出点门道来了。', '这轮不算封神，但已经很会来事了。'],
+      low: ['先别急着叹气，这轮只是剧情铺垫。', '今天的手感还在加载中，不过问题不大。', '这轮属于“先认识问题，再收拾问题”的标准开局。']
+    },
+    {
+      high: ['很好，节奏部队今天状态整齐。', '收到，这一轮表现相当利索。', '漂亮，鼓点集合得很有纪律。'],
+      mid: ['报告，整体节奏基本归队。', '这一轮已经从散兵游勇进化到正规军了。', '不错，队形已经立起来了，接下来练整齐度。'],
+      low: ['报告，个别鼓点还有点自由散漫。', '这一轮还在整队阶段，不过方向没错。', '先别追求威风出场，咱们把队伍排整齐再说。']
+    },
+    {
+      high: ['哈，这轮打得挺有主角气场。', '不错哦，今天这节奏像是自己会发光。', '这波可以，鼓点已经开始有表情了。'],
+      mid: ['嗯哼，这轮已经不只是“打对”，而是开始有点“会打”的意思了。', '行，这次的节奏终于不再拘谨，开始活起来了。', '这轮挺可爱，已经能听出一点自己的味道。'],
+      low: ['没关系，这轮先当作和节奏交个朋友。', '今天这节奏还有点害羞，我们慢慢把它哄出来。', '这轮别急着赢，先让手和耳朵重新站到一边。']
+    }
+  ];
   const messages = [];
   const avgSignedOffset =
     Math.round(state.userHitRecords.value.reduce((sum, record) => sum + record.offset, 0) / state.userHitRecords.value.length);
+  const accuracy = report.value.accuracy ?? 0;
+  const openerPack = openerPacks[stylePackIndex];
+
+  if (accuracy >= 85) {
+    messages.push(pickVariant(openerPack.high, 6));
+  } else if (accuracy >= 60) {
+    messages.push(pickVariant(openerPack.mid, 6));
+  } else {
+    messages.push(pickVariant(openerPack.low, 6));
+  }
 
   if (avgSignedOffset <= -20) {
-    messages.push('整体偏快。先把击打重心往拍点后面放一点，尤其注意起拍不要抢。');
+    messages.push(
+      pickVariant([
+        '这一轮有点抢跑，像是脚还没站稳心已经冲出去了。下一轮先稳一下呼吸，再把落点放回拍子正中间。',
+        '鼓点有点着急出门，拍子还没开门它就先探头了。下一轮别催它，让每一下都晚半口气落下去。',
+        '你这轮像在和节拍器比谁先到，胜负心挺强。下一轮收一收锋芒，把“准”放在“快”前面。'
+      ])
+    );
   } else if (avgSignedOffset >= 20) {
-    messages.push('整体偏慢。可以把注意力放在节拍器前沿，提前准备落槌。');
+    messages.push(
+      pickVariant([
+        '这一轮有点慢半拍，像是在拍子后面散步。不过节奏感还在队伍里，下一轮早点准备动作就会顺很多。',
+        '鼓点今天走的是松弛路线，结果比拍子晚到了一点。下一轮可以更早抬手，让动作主动去迎拍点。',
+        '这轮像是在等节拍器先坐稳你再出手，礼貌是有了，速度差一点。下一轮大胆一点，往前贴近拍子。'
+      ])
+    );
   } else {
-    messages.push('整体时值中心基本稳定，可以优先提升连续小节之间的一致性。');
+    messages.push(
+      pickVariant([
+        '这一轮的重心挺稳，鼓点基本都踩在正路上。接下来不用大修大改，保持这股稳定劲就很有戏。',
+        '整体节奏感已经进入“靠谱模式”了，这很不错。下一轮要做的不是推翻重来，而是把好状态多复制几小节。',
+        '这轮打得挺像样，拍子没有东倒西歪。现在最值钱的是把这种稳定感连续保存下去。'
+      ])
+    );
   }
 
   const weakestMeasure = measureSummaries.value.reduce((worst, current) => {
@@ -168,16 +221,52 @@ const coachingSummary = computed(() => {
 
   if (weakestMeasure && weakestMeasure.expected) {
     messages.push(
-      `第 ${weakestMeasure.measureNumber} 小节最不稳定。建议单独循环这一小节，先把每拍打匀，再回到完整录音。`
+      pickVariant(
+        [
+          `第 ${weakestMeasure.measureNumber} 小节今天有点掉链子。把它单独拎出来循环几遍，等它服气了，再回整段会轻松很多。`,
+          `第 ${weakestMeasure.measureNumber} 小节像是在偷偷给你出小考题。别急着整段重来，先单独收拾它，效果会更快。`,
+          `第 ${weakestMeasure.measureNumber} 小节是这轮的“隐藏 Boss”。先单刷这一个小节，打顺以后整段会一下子顺眼很多。`
+        ],
+        1
+      )
     );
   }
 
   const highMissMeasures = measureSummaries.value.filter((summary) => summary.expected && summary.miss / summary.expected >= 0.3);
   if (highMissMeasures.length) {
-    messages.push(`有 ${highMissMeasures.length} 个小节的大偏差较多，建议先降 BPM 5 到 10 再练。`);
+    messages.push(
+      pickVariant(
+        [
+          `这次有 ${highMissMeasures.length} 个小节还在闹情绪。先把 BPM 放慢 5 到 10，让每一下都先打匀，世界会温柔很多。`,
+          `这一轮有 ${highMissMeasures.length} 个小节明显不太配合。别硬顶速度，先降一点 BPM，把动作整理干净再冲。`,
+          `有 ${highMissMeasures.length} 个小节正在集体唱反调。先慢一点点，把颗粒感打出来，再提速会更爽。`
+        ],
+        2
+      )
+    );
   } else {
-    messages.push('大偏差不多，下一步可以保持 BPM 不变，优先把 Perfect 比例提上去。');
+    messages.push(
+      pickVariant(
+        [
+          '大偏差其实不多，说明底子已经搭起来了。下一轮保持现在的 BPM，专心把更多 Good 推进 Perfect 区。',
+          '整体没有太多离谱失误，这说明你已经站稳了。下一轮别急着加速，先把“还不错”打成“真不错”。',
+          '这一轮大体很稳，没有太多翻车现场。保持 BPM 不变，试着把细节再磨亮一点。'
+        ],
+        3
+      )
+    );
   }
+
+  messages.push(
+    pickVariant(
+      [
+        '今天不是来一口气封神的，是来把下一轮变得更顺手一点的。能稳一点、松一点，就是赚到。',
+        '别急着把自己练成节拍器本体。每一轮都比上一轮更松一点、更稳一点，进步就已经在发生。',
+        '练鼓这件事，本来就是一轮一轮把手感攒出来。今天多攒一点点，明天就会更好用。'
+      ],
+      4
+    )
+  );
 
   return messages;
 });
@@ -378,6 +467,7 @@ function evaluateHitAlignment(rawHits, expectedNotes, latencyMs) {
 }
 
 function analyzeRecordedSession() {
+  coachingSeed.value = Math.floor(Math.random() * 10_000);
   const expectedNotes = getExpectedNotesInWindow(recordingStartTime.value, recordingEndTime.value);
   analyzedExpectedCount.value = expectedNotes.length;
   analyzedMeasures.value = buildAnalyzedMeasures();
@@ -455,6 +545,7 @@ function resetSession() {
   ignoredHitCount.value = 0;
   analyzedExpectedCount.value = 0;
   analyzedLatencyMs.value = null;
+  coachingSeed.value = 0;
   analyzedMeasures.value = [];
   analyzedNoteVisualStates.value = {};
   sessionElapsedSec.value = 0;
@@ -792,6 +883,7 @@ async function toggleRun() {
     ignoredHitCount.value = 0;
     analyzedExpectedCount.value = 0;
     analyzedLatencyMs.value = null;
+    coachingSeed.value = 0;
     analyzedMeasures.value = [];
     analyzedNoteVisualStates.value = {};
     sessionElapsedSec.value = 0;
@@ -930,6 +1022,17 @@ onBeforeUnmount(() => {
     </section>
 
     <section v-else class="results-shell">
+      <ReportPanel
+        mode="summary"
+        :report="report"
+        :judgement-profile="state.judgementProfile.value"
+        :judgement-label="judgementLabel"
+        :recording-measures="state.recordingMeasures.value"
+        :analyzed-latency-ms="analyzedLatencyMs"
+        :measure-summaries="measureSummaries"
+        :coaching-summary="coachingSummary"
+      />
+
       <header class="results-header card">
         <div>
           <div class="training-kicker">训练结果</div>
@@ -951,6 +1054,7 @@ onBeforeUnmount(() => {
       </section>
 
       <ReportPanel
+        mode="details"
         :report="report"
         :judgement-profile="state.judgementProfile.value"
         :judgement-label="judgementLabel"
