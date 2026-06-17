@@ -1,4 +1,5 @@
 import { computed, reactive, ref } from 'vue';
+import { createPracticeMeasure, createPracticeScore, setBeatRhythm, setMeasureBeatCount } from '../domain/score/model.js';
 import { buildFlatSequenceNotes, getShortestSubdivisionDuration } from '../lib/rhythm.js';
 import { judgementProfiles } from '../data/rhythmOptions.js';
 
@@ -12,10 +13,10 @@ export function useTrainerState() {
   const selectedMeasureIndex = ref(0);
   const noteVisualStates = reactive({});
   const userHitRecords = ref([]);
-  const measures = ref([
-    { id: 1, rhythms: ['8', '8', '8', '8'] },
-    { id: 2, rhythms: ['16', '16', '16', '16'] }
-  ]);
+  const score = ref(createPracticeScore([
+    ['8', '8', '8', '8'],
+    ['16', '16', '16', '16']
+  ]));
 
   const geometry = reactive({
     startX: 110,
@@ -25,6 +26,7 @@ export function useTrainerState() {
     staffBaseYOffset: 62
   });
 
+  const measures = computed(() => score.value.measures);
   const flatSequenceNotes = computed(() => buildFlatSequenceNotes(measures.value, bpm.value, geometry));
   const judgementProfile = computed(() => judgementProfiles[judgementMode.value] ?? judgementProfiles.normal);
   const micCooldownSeconds = computed(() => {
@@ -37,20 +39,23 @@ export function useTrainerState() {
   }
 
   function addMeasure() {
-    if (measures.value.length >= 8) return;
-    const nextId = Math.max(...measures.value.map((measure) => measure.id)) + 1;
-    measures.value.push({ id: nextId, rhythms: ['8', '8', '8', '8'] });
-    selectedMeasureIndex.value = measures.value.length - 1;
+    if (score.value.measures.length >= 8) return;
+    score.value.measures.push(createPracticeMeasure(['8', '8', '8', '8']));
+    selectedMeasureIndex.value = score.value.measures.length - 1;
   }
 
   function deleteSelectedMeasure() {
-    if (measures.value.length <= 1) return;
-    measures.value.splice(selectedMeasureIndex.value, 1);
+    if (score.value.measures.length <= 1) return;
+    score.value.measures.splice(selectedMeasureIndex.value, 1);
     selectedMeasureIndex.value = Math.max(0, selectedMeasureIndex.value - 1);
   }
 
   function updateBeatRhythm(beatIndex, value) {
-    measures.value[selectedMeasureIndex.value].rhythms[beatIndex] = value;
+    setBeatRhythm(score.value.measures[selectedMeasureIndex.value], beatIndex, value);
+  }
+
+  function updateMeasureBeatCount(beatCount) {
+    setMeasureBeatCount(score.value.measures[selectedMeasureIndex.value], beatCount);
   }
 
   return {
@@ -62,6 +67,7 @@ export function useTrainerState() {
     judgementMode,
     judgementProfile,
     measures,
+    score,
     micCooldownSeconds,
     noteVisualStates,
     recordingMeasures,
@@ -71,6 +77,7 @@ export function useTrainerState() {
     addMeasure,
     clearVisualStates,
     deleteSelectedMeasure,
-    updateBeatRhythm
+    updateBeatRhythm,
+    updateMeasureBeatCount
   };
 }

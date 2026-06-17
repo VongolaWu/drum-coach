@@ -1,8 +1,28 @@
 <script setup>
 import { computed } from 'vue';
 import { judgementProfiles, rhythmOptions } from '../data/rhythmOptions.js';
+import { getBeatRhythm, getMeasureBeatCount } from '../domain/score/model.js';
 
-defineProps({
+defineEmits([
+  'update:bpm',
+  'update:metronomeVolumePercent',
+  'update:thresholdPercent',
+  'update:judgementMode',
+  'update:warmupMeasures',
+  'update:recordingMeasures',
+  'select-measure',
+  'update-beat-count',
+  'update-rhythm',
+  'add-measure',
+  'delete-measure',
+  'toggle-run'
+]);
+
+const judgementOptions = computed(() =>
+  Object.entries(judgementProfiles).map(([value, profile]) => ({ value, label: profile.label }))
+);
+const beatCountOptions = [2, 3, 4, 5, 6, 7, 8];
+const props = defineProps({
   bpm: Number,
   metronomeVolumePercent: Number,
   thresholdPercent: Number,
@@ -16,30 +36,15 @@ defineProps({
   sessionToolbarText: String
 });
 
-defineEmits([
-  'update:bpm',
-  'update:metronomeVolumePercent',
-  'update:thresholdPercent',
-  'update:judgementMode',
-  'update:warmupMeasures',
-  'update:recordingMeasures',
-  'select-measure',
-  'update-rhythm',
-  'add-measure',
-  'delete-measure',
-  'toggle-run'
-]);
-
-const judgementOptions = computed(() =>
-  Object.entries(judgementProfiles).map(([value, profile]) => ({ value, label: profile.label }))
-);
+const selectedMeasure = computed(() => props.measures?.[props.selectedMeasureIndex] ?? null);
+const selectedMeasureBeatCount = computed(() => getMeasureBeatCount(selectedMeasure.value));
 </script>
 
 <template>
   <section class="panel" :class="{ 'mobile-session-panel': isRunning }">
     <header class="panel-header">
       <div>
-        <h1>鼓点节拍训练器 - 山海音乐特供版</h1>
+        <h1>Drum Coach 山海</h1>
         <p>让我们荡起鼓棒，小手法推开波浪。设置节奏、热身和录音小节后开始训练。录音结束会自动生成逐小节结果和练习建议。</p>
       </div>
       <button class="primary-btn" type="button" @click="$emit('toggle-run')">
@@ -138,11 +143,21 @@ const judgementOptions = computed(() =>
 
     <div class="card" :class="{ 'mobile-hidden-while-running': isRunning }">
       <div class="card-title">当前小节编辑</div>
+      <label class="field beat-count-field">
+        <span>每小节拍数</span>
+        <select
+          :value="selectedMeasureBeatCount"
+          :disabled="isRunning"
+          @change="$emit('update-beat-count', Number($event.target.value))"
+        >
+          <option v-for="count in beatCountOptions" :key="count" :value="count">{{ count }}/4</option>
+        </select>
+      </label>
       <div class="beat-grid">
-        <label v-for="beatIndex in 4" :key="beatIndex" class="field">
+        <label v-for="beatIndex in selectedMeasureBeatCount" :key="beatIndex" class="field">
           <span>第 {{ beatIndex }} 拍</span>
           <select
-            :value="measures[selectedMeasureIndex].rhythms[beatIndex - 1]"
+            :value="getBeatRhythm(selectedMeasure, beatIndex - 1)"
             :disabled="isRunning"
             @change="$emit('update-rhythm', beatIndex - 1, $event.target.value)"
           >
@@ -200,5 +215,10 @@ const judgementOptions = computed(() =>
   .mobile-hidden-while-running {
     display: none;
   }
+}
+
+.beat-count-field {
+  max-width: 220px;
+  margin-bottom: 12px;
 }
 </style>

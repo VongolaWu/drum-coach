@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { parseBeatSubdivisions } from '../lib/rhythm.js';
+import { getBeatRhythm, getMeasureBeatCount } from '../domain/score/model.js';
 
 const props = defineProps({
   bpm: Number,
@@ -234,11 +235,12 @@ function draw() {
     startX: isCompact ? 76 : props.geometry.startX,
     endX: width - (isCompact ? 24 : 50)
   };
-  localGeometry.beatWidth = (localGeometry.endX - localGeometry.startX) / 4;
 
   props.measures.forEach((measure, measureIndex) => {
     const staffY = props.geometry.staffBaseYOffset + measureIndex * props.geometry.staffHeight;
     const lineSpacing = 8;
+    const beatCount = getMeasureBeatCount(measure);
+    const beatWidth = (localGeometry.endX - localGeometry.startX) / Math.max(beatCount, 1);
 
     ctx.strokeStyle = '#1f1f23';
     ctx.lineWidth = 1.5;
@@ -263,15 +265,16 @@ function draw() {
     ctx.fillText(`M${props.measureNumberOffset + measureIndex + 1}`, localGeometry.startX - (isCompact ? 28 : 50), staffY - 26);
 
     const beatDuration = 60 / props.bpm;
-    for (let beatIndex = 0; beatIndex < 4; beatIndex += 1) {
-      drawBeatGuide(ctx, localGeometry.startX + beatIndex * localGeometry.beatWidth, staffY);
+    for (let beatIndex = 0; beatIndex < beatCount; beatIndex += 1) {
+      drawBeatGuide(ctx, localGeometry.startX + beatIndex * beatWidth, staffY);
+      const rhythm = getBeatRhythm(measure, beatIndex);
 
       const subNotes = parseBeatSubdivisions(
         beatIndex,
-        measure.rhythms[beatIndex],
+        rhythm,
         beatIndex * beatDuration,
         beatDuration,
-        localGeometry.beatWidth,
+        beatWidth,
         localGeometry.startX
       );
       const notesForBeat = subNotes.map((note) => ({
@@ -280,7 +283,7 @@ function draw() {
         beatIndex
       }));
 
-      drawGroupedNotes(ctx, notesForBeat, staffY - 4, measure.rhythms[beatIndex], props.activePlayhead);
+      drawGroupedNotes(ctx, notesForBeat, staffY - 4, rhythm, props.activePlayhead);
     }
   });
 }
