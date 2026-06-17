@@ -8,6 +8,8 @@ defineProps({
   thresholdPercent: Number,
   judgementMode: String,
   measures: Array,
+  warmupMeasures: Number,
+  recordingMeasures: Number,
   selectedMeasureIndex: Number,
   isRunning: Boolean
 });
@@ -17,6 +19,8 @@ defineEmits([
   'update:metronomeVolumePercent',
   'update:thresholdPercent',
   'update:judgementMode',
+  'update:warmupMeasures',
+  'update:recordingMeasures',
   'select-measure',
   'update-rhythm',
   'add-measure',
@@ -52,14 +56,15 @@ const judgementOptions = computed(() =>
             class="measure-chip"
             :class="{ active: selectedMeasureIndex === index }"
             type="button"
+            :disabled="isRunning"
             @click="$emit('select-measure', index)"
           >
             M{{ index + 1 }}
           </button>
         </div>
         <div class="card-actions">
-          <button type="button" @click="$emit('add-measure')">新增小节</button>
-          <button type="button" @click="$emit('delete-measure')">删除当前小节</button>
+          <button type="button" :disabled="isRunning" @click="$emit('add-measure')">新增小节</button>
+          <button type="button" :disabled="isRunning" @click="$emit('delete-measure')">删除当前小节</button>
         </div>
       </div>
 
@@ -67,7 +72,7 @@ const judgementOptions = computed(() =>
         <div class="card-title">参数</div>
         <label class="field">
           <span>BPM: {{ bpm }}</span>
-          <input type="range" min="50" max="220" :value="bpm" @input="$emit('update:bpm', Number($event.target.value))" />
+          <input type="range" min="50" max="220" :value="bpm" :disabled="isRunning" @input="$emit('update:bpm', Number($event.target.value))" />
         </label>
         <label class="field">
           <span>节拍器音量: {{ metronomeVolumePercent }}%</span>
@@ -91,12 +96,35 @@ const judgementOptions = computed(() =>
         </label>
         <label class="field">
           <span>判定严格度</span>
-          <select :value="judgementMode" @change="$emit('update:judgementMode', $event.target.value)">
+          <select :value="judgementMode" :disabled="isRunning" @change="$emit('update:judgementMode', $event.target.value)">
             <option v-for="option in judgementOptions" :key="option.value" :value="option.value">
               {{ option.label }}
             </option>
           </select>
         </label>
+        <label class="field">
+          <span>热身小节: {{ warmupMeasures }}</span>
+          <input
+            type="range"
+            min="0"
+            max="8"
+            :value="warmupMeasures"
+            :disabled="isRunning"
+            @input="$emit('update:warmupMeasures', Number($event.target.value))"
+          />
+        </label>
+        <label class="field">
+          <span>录音小节: {{ recordingMeasures }}</span>
+          <input
+            type="range"
+            min="1"
+            max="16"
+            :value="recordingMeasures"
+            :disabled="isRunning"
+            @input="$emit('update:recordingMeasures', Number($event.target.value))"
+          />
+        </label>
+        <p v-if="isRunning" class="panel-hint">训练进行中时，BPM、判定和节奏序列会锁定，避免当前会话的时间轴失真。</p>
       </div>
     </div>
 
@@ -107,6 +135,7 @@ const judgementOptions = computed(() =>
           <span>第 {{ beatIndex }} 拍</span>
           <select
             :value="measures[selectedMeasureIndex].rhythms[beatIndex - 1]"
+            :disabled="isRunning"
             @change="$emit('update-rhythm', beatIndex - 1, $event.target.value)"
           >
             <option v-for="option in rhythmOptions" :key="option.value" :value="option.value">
@@ -118,3 +147,12 @@ const judgementOptions = computed(() =>
     </div>
   </section>
 </template>
+
+<style scoped>
+.panel-hint {
+  margin: 8px 0 0;
+  color: #a1a1aa;
+  font-size: 13px;
+  line-height: 1.5;
+}
+</style>

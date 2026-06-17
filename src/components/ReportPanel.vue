@@ -11,6 +11,14 @@ defineProps({
   judgementLabel: {
     type: String,
     required: true
+  },
+  recordingMeasures: {
+    type: Number,
+    required: true
+  },
+  analyzedLatencyMs: {
+    type: Number,
+    default: null
   }
 });
 
@@ -29,18 +37,20 @@ const legendItems = [
       <div>
         <div class="card-title">训练报告</div>
         <p class="card-subtitle">
-          当前判定档位：{{ judgementLabel }}。Perfect ±{{ judgementProfile.perfectMs }}ms，Good ±{{ judgementProfile.goodMs }}ms，超出
-          ±{{ judgementProfile.missMs }}ms 的击打不会对齐到目标音符。
+          当前判定档位：{{ judgementLabel }}。本次报告按完整录音窗口 {{ recordingMeasures }} 小节统计，不是只看当前五线谱这一轮。
+          Perfect ±{{ judgementProfile.perfectMs }}ms，Good ±{{ judgementProfile.goodMs }}ms，超出 ±{{ judgementProfile.missMs }}ms 的击打不会对齐到目标音符。
+          {{ analyzedLatencyMs == null ? '' : ` 自动估计录音延迟 ${analyzedLatencyMs > 0 ? '+' : ''}${analyzedLatencyMs}ms。` }}
         </p>
       </div>
     </div>
 
     <div class="report-grid">
       <div><span>目标音符</span><strong class="mono">{{ report.expected }}</strong></div>
-      <div><span>成功对齐</span><strong class="mono">{{ report.total }}</strong></div>
+      <div><span>窗口内对齐</span><strong class="mono">{{ report.aligned }}</strong></div>
+      <div><span>达标命中</span><strong class="mono">{{ report.scored }}</strong></div>
       <div><span>采集击打</span><strong class="mono">{{ report.detected }}</strong></div>
       <div><span>未对齐</span><strong class="mono">{{ report.ignored }}</strong></div>
-      <div><span>命中率</span><strong class="mono">{{ report.accuracy == null ? '-- %' : `${report.accuracy}%` }}</strong></div>
+      <div><span>达标率</span><strong class="mono">{{ report.accuracy == null ? '-- %' : `${report.accuracy}%` }}</strong></div>
       <div><span>Perfect</span><strong class="mono">{{ report.perfect }}</strong></div>
       <div><span>Good</span><strong class="mono">{{ report.good }}</strong></div>
       <div><span>偏差较大</span><strong class="mono">{{ report.miss }}</strong></div>

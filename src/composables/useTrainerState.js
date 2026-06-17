@@ -7,6 +7,8 @@ export function useTrainerState() {
   const amplitudeThreshold = ref(0.35);
   const judgementMode = ref('normal');
   const isRunning = ref(false);
+  const warmupMeasures = ref(1);
+  const recordingMeasures = ref(2);
   const selectedMeasureIndex = ref(0);
   const noteVisualStates = reactive({});
   const userHitRecords = ref([]);
@@ -62,8 +64,10 @@ export function useTrainerState() {
     measures,
     micCooldownSeconds,
     noteVisualStates,
+    recordingMeasures,
     selectedMeasureIndex,
     userHitRecords,
+    warmupMeasures,
     addMeasure,
     clearVisualStates,
     deleteSelectedMeasure,

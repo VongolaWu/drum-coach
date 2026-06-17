@@ -45,10 +45,11 @@ export function buildFlatSequenceNotes(measures, bpm, geometry) {
   measures.forEach((measure, measureIndex) => {
     const measureOffsetTime = measureIndex * beatDuration * 4;
     for (let beatIndex = 0; beatIndex < 4; beatIndex += 1) {
+      const beatStartTime = measureOffsetTime + beatIndex * beatDuration;
       const subNotes = parseBeatSubdivisions(
         beatIndex,
         measure.rhythms[beatIndex],
-        measureOffsetTime,
+        beatStartTime,
         beatDuration,
         geometry.beatWidth,
         geometry.startX

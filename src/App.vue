@@ -24,10 +24,19 @@ const micStatus = ref('麦克风未激活');
 const inputLevel = ref(0);
 const activePlayhead = ref(null);
 const sessionElapsedSec = ref(0);
+const sessionPhase = ref('idle');
 const detectedHitCount = ref(0);
 const ignoredHitCount = ref(0);
 const matchedCycleNoteKeys = ref(new Set());
 const metronomeVolumePercent = ref(100);
+const recentMetronomeClickTimes = ref([]);
+const metronomeClickHistory = ref([]);
+const rawCapturedHits = ref([]);
+const recordingStartTime = ref(0);
+const recordingEndTime = ref(0);
+const sessionStopTimeoutId = ref(null);
+const analyzedExpectedCount = ref(0);
+const analyzedLatencyMs = ref(null);
 
 const thresholdPercent = computed({
   get: () => Math.round(state.amplitudeThreshold.value * 100),
@@ -54,6 +63,8 @@ const expectedNoteCount = computed(() => {
   return fullCycles * notesPerSequence.value + currentCycleNotes;
 });
 
+const displayedExpectedNoteCount = computed(() => (state.isRunning.value ? expectedNoteCount.value : analyzedExpectedCount.value));
+
 const report = computed(() => {
   const records = state.userHitRecords.value;
   let perfect = 0;
@@ -68,19 +79,21 @@ const report = computed(() => {
     else miss += 1;
   });
 
-  const matched = records.length;
-  const expected = expectedNoteCount.value;
+  const aligned = records.length;
+  const scored = perfect + good;
+  const expected = displayedExpectedNoteCount.value;
 
   return {
-    total: matched,
+    aligned,
+    scored,
     expected,
     detected: detectedHitCount.value,
     ignored: ignoredHitCount.value,
     perfect,
     good,
     miss,
-    avg: matched ? Math.round(totalOffset / matched) : null,
-    accuracy: expected ? Math.round((matched / expected) * 100) : null
+    avg: aligned ? Math.round(totalOffset / aligned) : null,
+    accuracy: expected ? Math.round((scored / expected) * 100) : null
   };
 });
 
@@ -124,6 +137,8 @@ function playQuarterMetronomeClick(beatIndex, time) {
   gain.gain.exponentialRampToValueAtTime(0.001, time + 0.055);
   osc.start(time);
   osc.stop(time + 0.065);
+  recentMetronomeClickTimes.value.push(time);
+  metronomeClickHistory.value.push(time);
 }
 
 function metronomeVolumeToGain(volumePercent) {
@@ -156,88 +171,277 @@ function ensureMetronomeBus() {
   metronomeMasterGain.value = masterGain;
 }
 
-function processLiveDrumHit(hitTime) {
-  if (!state.isRunning.value || !state.flatSequenceNotes.value.length) return;
+function getMeasureDurationSec() {
+  return (60 / state.bpm.value) * 4;
+}
 
-  detectedHitCount.value += 1;
+function getSequenceDurationSec() {
+  return getMeasureDurationSec() * state.measures.value.length;
+}
 
-  const totalMeasureSec = (60 / state.bpm.value) * 4;
-  const totalSequenceSec = totalMeasureSec * state.measures.value.length;
-  const elapsedSinceStart = hitTime - sequenceStartAudioTime.value;
-  const currentCycleIndex = Math.floor(elapsedSinceStart / totalSequenceSec);
+function getExpectedNotesInWindow(windowStartTime, windowEndTime) {
+  const sequenceDuration = getSequenceDurationSec();
+  if (!sequenceDuration || !state.flatSequenceNotes.value.length) return [];
+
+  const firstCycleIndex = Math.floor((windowStartTime - sequenceStartAudioTime.value) / sequenceDuration) - 1;
+  const lastCycleIndex = Math.ceil((windowEndTime - sequenceStartAudioTime.value) / sequenceDuration) + 1;
+  const notes = [];
+
+  for (let cycleIndex = firstCycleIndex; cycleIndex <= lastCycleIndex; cycleIndex += 1) {
+    state.flatSequenceNotes.value.forEach((note) => {
+      if (note.isRest) return;
+
+      const absoluteTime = sequenceStartAudioTime.value + cycleIndex * sequenceDuration + note.offsetFromSeqStart;
+      if (absoluteTime < windowStartTime || absoluteTime >= windowEndTime) return;
+
+      notes.push({
+        key: `${cycleIndex}:${note.uniqueId}`,
+        cycleIndex,
+        noteId: note.uniqueId,
+        absoluteTime,
+        measureIndex: note.measureIndex,
+        beatIndex: note.beatIndex,
+        subIndex: note.subIndex
+      });
+    });
+  }
+
+  notes.sort((left, right) => left.absoluteTime - right.absoluteTime);
+  return notes;
+}
+
+function evaluateHitAlignment(rawHits, expectedNotes, latencyMs) {
   const missWindowMs = state.judgementProfile.value.missMs;
-  const candidates = [];
+  const adjustedHits = rawHits.map((time) => time - latencyMs / 1000);
+  const matchedKeys = new Set();
+  const records = [];
+  let perfect = 0;
+  let good = 0;
+  let miss = 0;
+  let totalAbs = 0;
 
-  state.flatSequenceNotes.value.forEach((note) => {
-    if (note.isRest) return;
+  adjustedHits.forEach((adjustedTime, index) => {
+    let best = null;
 
-    [currentCycleIndex - 1, currentCycleIndex, currentCycleIndex + 1].forEach((cycleIndex) => {
-      const absoluteTargetTime = sequenceStartAudioTime.value + cycleIndex * totalSequenceSec + note.offsetFromSeqStart;
-      const diffMs = Math.round((hitTime - absoluteTargetTime) * 1000);
+    expectedNotes.forEach((note) => {
+      if (matchedKeys.has(note.key)) return;
+
+      const diffMs = Math.round((adjustedTime - note.absoluteTime) * 1000);
       if (Math.abs(diffMs) > missWindowMs) return;
 
-      const cycleNoteKey = `${cycleIndex}:${note.uniqueId}`;
-      candidates.push({
-        note,
-        cycleIndex,
-        cycleNoteKey,
-        diffMs,
-        isMatched: matchedCycleNoteKeys.value.has(cycleNoteKey)
-      });
+      if (!best || Math.abs(diffMs) < Math.abs(best.diffMs)) {
+        best = { note, diffMs };
+      }
+    });
+
+    if (!best) return;
+
+    matchedKeys.add(best.note.key);
+    totalAbs += Math.abs(best.diffMs);
+
+    let rating = 'miss';
+    if (Math.abs(best.diffMs) <= state.judgementProfile.value.perfectMs) {
+      rating = 'perfect';
+      perfect += 1;
+    } else if (Math.abs(best.diffMs) <= state.judgementProfile.value.goodMs) {
+      rating = 'good';
+      good += 1;
+    } else {
+      miss += 1;
+    }
+
+    records.push({
+      time: rawHits[index],
+      offset: best.diffMs,
+      rating,
+      cycleIndex: best.note.cycleIndex,
+      noteId: best.note.noteId
     });
   });
 
-  if (!candidates.length) {
-    ignoredHitCount.value += 1;
-    realtimeFeedback.value = '检测到了击打，但没有对齐到任何目标音符。';
-    offsetMs.value = null;
-    return;
-  }
+  const score = perfect * 4 + good * 2 + miss;
 
-  candidates.sort((left, right) => {
-    if (left.isMatched !== right.isMatched) return Number(left.isMatched) - Number(right.isMatched);
-    return Math.abs(left.diffMs) - Math.abs(right.diffMs);
-  });
-
-  const chosen = candidates.find((candidate) => !candidate.isMatched);
-  if (!chosen) {
-    ignoredHitCount.value += 1;
-    realtimeFeedback.value = '这一击靠近的目标音符已经记过了，未重复计数。';
-    offsetMs.value = null;
-    return;
-  }
-
-  matchedCycleNoteKeys.value.add(chosen.cycleNoteKey);
-
-  let rating = 'miss';
-  if (Math.abs(chosen.diffMs) <= state.judgementProfile.value.perfectMs) rating = 'perfect';
-  else if (Math.abs(chosen.diffMs) <= state.judgementProfile.value.goodMs) rating = 'good';
-
-  state.noteVisualStates[chosen.note.uniqueId] = {
-    status: rating,
-    offset: chosen.diffMs,
-    timestamp: hitTime
+  return {
+    score,
+    matched: records.length,
+    totalAbs,
+    records,
+    ignored: rawHits.length - records.length
   };
+}
 
-  state.userHitRecords.value.push({
-    time: hitTime,
-    offset: chosen.diffMs,
-    rating,
-    cycleIndex: chosen.cycleIndex,
-    noteId: chosen.note.uniqueId
+function analyzeRecordedSession() {
+  const expectedNotes = getExpectedNotesInWindow(recordingStartTime.value, recordingEndTime.value);
+  analyzedExpectedCount.value = expectedNotes.length;
+  state.userHitRecords.value = [];
+  ignoredHitCount.value = 0;
+  analyzedLatencyMs.value = null;
+  state.clearVisualStates();
+
+  if (!rawCapturedHits.value.length || !expectedNotes.length) {
+    realtimeFeedback.value = '录音已结束，但没有足够的数据可供分析。';
+    return;
+  }
+
+  const { filteredHits, removedCount, bleedLatencyMs } = filterBleedHits(rawCapturedHits.value);
+
+  if (!filteredHits.length) {
+    detectedHitCount.value = rawCapturedHits.value.length;
+    ignoredHitCount.value = 0;
+    realtimeFeedback.value =
+      bleedLatencyMs == null
+        ? '分析完成，录音中没有检测到可用于评分的真实击打。'
+        : `分析完成，检测到约 +${bleedLatencyMs}ms 的节拍器回灌，本次采集到的声音已全部过滤。`;
+    return;
+  }
+
+  let bestResult = null;
+
+  for (let latencyMs = -220; latencyMs <= 220; latencyMs += 2) {
+    const result = evaluateHitAlignment(filteredHits, expectedNotes, latencyMs);
+    if (
+      !bestResult ||
+      result.score > bestResult.score ||
+      (result.score === bestResult.score && result.matched > bestResult.matched) ||
+      (result.score === bestResult.score && result.matched === bestResult.matched && result.totalAbs < bestResult.totalAbs)
+    ) {
+      bestResult = { ...result, latencyMs };
+    }
+  }
+
+  if (!bestResult) {
+    realtimeFeedback.value = '录音已结束，但没有找到稳定的对齐结果。';
+    return;
+  }
+
+  analyzedLatencyMs.value = bestResult.latencyMs;
+  detectedHitCount.value = filteredHits.length;
+  ignoredHitCount.value = bestResult.ignored;
+  state.userHitRecords.value = bestResult.records;
+
+  bestResult.records.forEach((record) => {
+    state.noteVisualStates[record.noteId] = {
+      status: record.rating,
+      offset: record.offset,
+      timestamp: record.time
+    };
   });
 
-  realtimeFeedback.value =
-    rating === 'perfect'
-      ? `Perfect ±${Math.abs(chosen.diffMs)}ms`
-      : rating === 'good'
-        ? chosen.diffMs < 0
-          ? `稍快 ${chosen.diffMs}ms`
-          : `稍慢 +${chosen.diffMs}ms`
-        : chosen.diffMs < 0
-          ? `偏快 ${chosen.diffMs}ms`
-          : `偏慢 +${chosen.diffMs}ms`;
-  offsetMs.value = chosen.diffMs;
+  realtimeFeedback.value = `分析完成，估计录音延迟 ${bestResult.latencyMs > 0 ? '+' : ''}${bestResult.latencyMs}ms，过滤串音 ${removedCount} 次。`;
+  offsetMs.value = bestResult.records.length ? bestResult.records[bestResult.records.length - 1].offset : null;
+}
+
+function processLiveDrumHit(hitTime) {
+  if (!state.isRunning.value) return;
+
+  const withinRecordingWindow = hitTime >= recordingStartTime.value && hitTime <= recordingEndTime.value;
+
+  if (!withinRecordingWindow) return;
+
+  rawCapturedHits.value.push(hitTime);
+  detectedHitCount.value = rawCapturedHits.value.length;
+  realtimeFeedback.value = `录音中，已采集 ${rawCapturedHits.value.length} 次击打，结束后将统一分析。`;
+  offsetMs.value = null;
+}
+
+function pruneMatchedCycleNoteKeys(activeCycleIndex) {
+  const nextKeys = new Set();
+
+  matchedCycleNoteKeys.value.forEach((key) => {
+    const separatorIndex = key.indexOf(':');
+    const cycleIndex = Number.parseInt(key.slice(0, separatorIndex), 10);
+    if (Number.isNaN(cycleIndex)) return;
+
+    if (cycleIndex >= activeCycleIndex - 1) {
+      nextKeys.add(key);
+    }
+  });
+
+  matchedCycleNoteKeys.value = nextKeys;
+}
+
+function pruneRecentMetronomeClickTimes(now) {
+  recentMetronomeClickTimes.value = recentMetronomeClickTimes.value.filter((time) => now - time <= 0.32);
+}
+
+function getMetronomeBleedStrength(hitTime) {
+  for (const clickTime of recentMetronomeClickTimes.value) {
+    const diffMs = (hitTime - clickTime) * 1000;
+
+    if (diffMs >= -8 && diffMs <= 18) return 4.2;
+    if (diffMs > 18 && diffMs <= 42) return 2.6;
+    if (diffMs > 42 && diffMs <= 78) return 1.55;
+    if (diffMs > 78 && diffMs <= 135) return 1.9;
+    if (diffMs > 135 && diffMs <= 210) return 4.6;
+    if (diffMs > 210 && diffMs <= 260) return 2.2;
+  }
+
+  return 1;
+}
+
+function getNearestMetronomeDeltaMs(hitTime) {
+  if (!metronomeClickHistory.value.length) return null;
+
+  let closestDiffMs = null;
+  metronomeClickHistory.value.forEach((clickTime) => {
+    const diffMs = Math.round((hitTime - clickTime) * 1000);
+    if (closestDiffMs == null || Math.abs(diffMs) < Math.abs(closestDiffMs)) {
+      closestDiffMs = diffMs;
+    }
+  });
+
+  return closestDiffMs;
+}
+
+function filterBleedHits(rawHits) {
+  if (!rawHits.length || !metronomeClickHistory.value.length) {
+    return { filteredHits: rawHits, removedCount: 0, bleedLatencyMs: null };
+  }
+
+  const deltas = rawHits
+    .map((time) => getNearestMetronomeDeltaMs(time))
+    .filter((deltaMs) => deltaMs != null && deltaMs >= 40 && deltaMs <= 240);
+
+  if (!deltas.length) {
+    return { filteredHits: rawHits, removedCount: 0, bleedLatencyMs: null };
+  }
+
+  const buckets = new Map();
+  deltas.forEach((deltaMs) => {
+    const bucket = Math.round(deltaMs / 4) * 4;
+    buckets.set(bucket, (buckets.get(bucket) ?? 0) + 1);
+  });
+
+  let dominantBucket = null;
+  let dominantCount = 0;
+  buckets.forEach((count, bucket) => {
+    if (count > dominantCount) {
+      dominantBucket = bucket;
+      dominantCount = count;
+    }
+  });
+
+  if (dominantBucket == null || dominantCount < Math.max(4, Math.ceil(rawHits.length * 0.35))) {
+    return { filteredHits: rawHits, removedCount: 0, bleedLatencyMs: null };
+  }
+
+  const filteredHits = [];
+  let removedCount = 0;
+
+  rawHits.forEach((time) => {
+    const deltaMs = getNearestMetronomeDeltaMs(time);
+    if (deltaMs != null && Math.abs(deltaMs - dominantBucket) <= 18) {
+      removedCount += 1;
+      return;
+    }
+    filteredHits.push(time);
+  });
+
+  return {
+    filteredHits,
+    removedCount,
+    bleedLatencyMs: dominantBucket
+  };
 }
 
 async function initMicrophoneStream() {
@@ -260,15 +464,35 @@ async function initMicrophoneStream() {
   micStatus.value = '麦克风已激活，正在实时监听鼓点。';
 
   const source = audioCtx.value.createMediaStreamSource(stream);
+  const inputGain = audioCtx.value.createGain();
+  inputGain.gain.setValueAtTime(2.8, audioCtx.value.currentTime);
+
+  const highpass = audioCtx.value.createBiquadFilter();
+  highpass.type = 'highpass';
+  highpass.frequency.setValueAtTime(90, audioCtx.value.currentTime);
+  highpass.Q.setValueAtTime(0.5, audioCtx.value.currentTime);
+
+  const lowpass = audioCtx.value.createBiquadFilter();
+  lowpass.type = 'lowpass';
+  lowpass.frequency.setValueAtTime(6000, audioCtx.value.currentTime);
+  lowpass.Q.setValueAtTime(0.5, audioCtx.value.currentTime);
+
   const analyser = audioCtx.value.createAnalyser();
   analyser.fftSize = 1024;
-  analyser.smoothingTimeConstant = 0.15;
-  source.connect(analyser);
+  analyser.smoothingTimeConstant = 0.05;
+  source.connect(inputGain);
+  inputGain.connect(highpass);
+  highpass.connect(lowpass);
+  lowpass.connect(analyser);
 
   const dataArray = new Uint8Array(analyser.fftSize);
-  let lastLevel = 0;
+  const sampleRate = audioCtx.value.sampleRate;
+  const bufferDuration = dataArray.length / sampleRate;
+  let lastEnergy = 0;
+  let noiseFloor = 0.0006;
   let cooldownUntil = 0;
   let armed = true;
+  let displayedLevel = 0;
 
   if (micAnimationFrameId.value) cancelAnimationFrame(micAnimationFrameId.value);
 
@@ -277,34 +501,76 @@ async function initMicrophoneStream() {
 
     analyser.getByteTimeDomainData(dataArray);
 
-    let sumSquares = 0;
+    let energy = 0;
     let peak = 0;
+    let flux = 0;
+    let maxRise = 0;
+    let onsetSample = 0;
+    let previousAbs = 0;
     for (let i = 0; i < dataArray.length; i += 1) {
       const normalized = (dataArray[i] - 128) / 128;
-      sumSquares += normalized * normalized;
-      peak = Math.max(peak, Math.abs(normalized));
+      const absolute = Math.abs(normalized);
+      const rise = absolute - previousAbs;
+
+      energy += normalized * normalized;
+      peak = Math.max(peak, absolute);
+      if (rise > 0) {
+        flux += rise;
+      }
+      if (rise > maxRise) {
+        maxRise = rise;
+        onsetSample = i;
+      }
+
+      previousAbs = absolute;
     }
 
-    const rms = Math.sqrt(sumSquares / dataArray.length);
-    const level = Math.max(rms * 2.9, peak * 1.25);
-    inputLevel.value = Math.min(100, Math.round(level * 100));
+    energy /= dataArray.length;
+    const rms = Math.sqrt(energy);
+    const level = Math.min(1, rms * 4.8);
+    displayedLevel = level >= displayedLevel ? level : Math.max(level, displayedLevel * 0.88);
+    inputLevel.value = Math.min(100, Math.round(displayedLevel * 100));
 
     const triggerLevel = state.amplitudeThreshold.value;
-    const resetLevel = triggerLevel * 0.58;
-    const riseAmount = level - lastLevel;
     const now = audioCtx.value.currentTime;
+    const transientStrength = flux / dataArray.length;
+    const energyRise = Math.max(0, energy - lastEnergy);
+    const energyThreshold = noiseFloor * (1.02 + triggerLevel * 1.05) + 0.00004 + triggerLevel * 0.00032;
+    const peakThreshold = 0.015 + triggerLevel * 0.06;
+    const transientThreshold = 0.00014 + triggerLevel * 0.0017;
+    const resetThreshold = noiseFloor * (0.98 + triggerLevel * 0.18) + 0.00002;
+    const minEnergyRise = Math.max(noiseFloor * 0.04, transientThreshold * 0.03);
+    const minMaxRise = transientThreshold * 0.92;
 
-    if (level <= resetLevel) {
+    pruneRecentMetronomeClickTimes(now);
+    const bleedStrength = getMetronomeBleedStrength(now);
+    if (energy <= resetThreshold) {
       armed = true;
     }
 
-    if (state.isRunning.value && armed && now >= cooldownUntil && level >= triggerLevel && riseAmount >= 0.012) {
-      processLiveDrumHit(now);
+    if (bleedStrength === 1) {
+      noiseFloor = noiseFloor * 0.985 + energy * 0.015;
+    } else {
+      noiseFloor = noiseFloor * 0.996 + energy * 0.004;
+    }
+
+    if (
+      state.isRunning.value &&
+      armed &&
+      now >= cooldownUntil &&
+      energy >= energyThreshold * bleedStrength &&
+      peak >= peakThreshold * Math.min(2.6, bleedStrength * 1.18) &&
+      transientStrength >= transientThreshold * Math.min(2.4, bleedStrength * 1.08) &&
+      energyRise >= minEnergyRise * Math.min(1.9, bleedStrength * 0.92) &&
+      maxRise >= minMaxRise * Math.min(1.8, bleedStrength * 0.88)
+    ) {
+      const onsetTime = now - bufferDuration + onsetSample / sampleRate;
+      processLiveDrumHit(onsetTime);
       armed = false;
       cooldownUntil = now + state.micCooldownSeconds.value;
     }
 
-    lastLevel = level;
+    lastEnergy = energy;
     micAnimationFrameId.value = requestAnimationFrame(analyzeFrame);
   };
 
@@ -329,10 +595,24 @@ function renderLoop() {
 
   activePlayhead.value = getPlayheadState(audioCtx.value.currentTime);
 
-  const totalSequence = (60 / state.bpm.value) * 4 * state.measures.value.length;
+  const totalSequence = getSequenceDurationSec();
   const elapsed = Math.max(0, audioCtx.value.currentTime - sequenceStartAudioTime.value);
+  const currentCycleIndex = Math.floor(elapsed / totalSequence);
   const curSeqTime = elapsed % totalSequence;
+  const warmupEndElapsed = recordingStartTime.value - sequenceStartAudioTime.value;
+  const recordingEndElapsed = recordingEndTime.value - sequenceStartAudioTime.value;
   sessionElapsedSec.value = elapsed;
+  pruneMatchedCycleNoteKeys(currentCycleIndex);
+
+  if (elapsed < warmupEndElapsed) {
+    sessionPhase.value = 'warmup';
+    realtimeFeedback.value = `热身中，还剩 ${Math.max(0, Math.ceil((warmupEndElapsed - elapsed) / getMeasureDurationSec()))} 小节开始录音。`;
+  } else if (elapsed < recordingEndElapsed) {
+    sessionPhase.value = 'recording';
+    realtimeFeedback.value = `录音中，已采集 ${rawCapturedHits.value.length} 次击打，结束后将统一分析。`;
+  } else {
+    sessionPhase.value = 'analyzing';
+  }
 
   if (curSeqTime < lastRenderSeqTime.value) {
     state.clearVisualStates();
@@ -345,8 +625,14 @@ function renderLoop() {
 async function toggleRun() {
   if (state.isRunning.value) {
     state.isRunning.value = false;
+    sessionPhase.value = 'idle';
     realtimeFeedback.value = '训练已停止。';
     if (timerId.value) clearTimeout(timerId.value);
+    if (sessionStopTimeoutId.value) clearTimeout(sessionStopTimeoutId.value);
+    timerId.value = null;
+    sessionStopTimeoutId.value = null;
+    activePlayhead.value = null;
+    recentMetronomeClickTimes.value = [];
     return;
   }
 
@@ -362,20 +648,39 @@ async function toggleRun() {
     }
 
     state.isRunning.value = true;
+    sessionPhase.value = state.warmupMeasures.value > 0 ? 'warmup' : 'recording';
     state.clearVisualStates();
     state.userHitRecords.value = [];
     matchedCycleNoteKeys.value = new Set();
+    recentMetronomeClickTimes.value = [];
+    metronomeClickHistory.value = [];
+    rawCapturedHits.value = [];
     detectedHitCount.value = 0;
     ignoredHitCount.value = 0;
+    analyzedExpectedCount.value = 0;
+    analyzedLatencyMs.value = null;
     sessionElapsedSec.value = 0;
-    realtimeFeedback.value = '节拍器已同步，请开始击打。';
+    realtimeFeedback.value = '节拍器已同步，热身结束后开始录音。';
     offsetMs.value = null;
     sequenceStartAudioTime.value = audioCtx.value.currentTime + 0.15;
+    recordingStartTime.value = sequenceStartAudioTime.value + state.warmupMeasures.value * getMeasureDurationSec();
+    recordingEndTime.value = recordingStartTime.value + state.recordingMeasures.value * getMeasureDurationSec();
     nextNoteTime.value = sequenceStartAudioTime.value;
     currentQuarterIndex.value = 0;
     lastRenderSeqTime.value = 0;
     audioSchedulerLoop();
     renderLoop();
+    sessionStopTimeoutId.value = window.setTimeout(() => {
+      state.isRunning.value = false;
+      sessionPhase.value = 'analyzing';
+      if (timerId.value) clearTimeout(timerId.value);
+      timerId.value = null;
+      activePlayhead.value = null;
+      analyzeRecordedSession();
+      recentMetronomeClickTimes.value = [];
+      sessionStopTimeoutId.value = null;
+      sessionPhase.value = 'done';
+    }, Math.max(0, (recordingEndTime.value - audioCtx.value.currentTime + 0.12) * 1000));
   } catch (error) {
     micStatus.value = '麦克风启动失败';
     if (error instanceof DOMException) {
@@ -392,6 +697,7 @@ async function toggleRun() {
       realtimeFeedback.value = error instanceof Error ? error.message : '无法启动麦克风。';
     }
     state.isRunning.value = false;
+    sessionPhase.value = 'idle';
   }
 }
 
@@ -413,6 +719,7 @@ watch(metronomeVolumePercent, (value) => {
 
 onBeforeUnmount(() => {
   if (timerId.value) clearTimeout(timerId.value);
+  if (sessionStopTimeoutId.value) clearTimeout(sessionStopTimeoutId.value);
   if (micAnimationFrameId.value) cancelAnimationFrame(micAnimationFrameId.value);
   if (micStream.value) micStream.value.getTracks().forEach((track) => track.stop());
   if (audioCtx.value && audioCtx.value.state !== 'closed') audioCtx.value.close();
@@ -427,12 +734,16 @@ onBeforeUnmount(() => {
       :threshold-percent="thresholdPercent"
       :judgement-mode="state.judgementMode.value"
       :measures="state.measures.value"
+      :warmup-measures="state.warmupMeasures.value"
+      :recording-measures="state.recordingMeasures.value"
       :selected-measure-index="state.selectedMeasureIndex.value"
       :is-running="state.isRunning.value"
       @update:bpm="state.bpm.value = $event"
       @update:metronome-volume-percent="metronomeVolumePercent = $event"
       @update:threshold-percent="thresholdPercent = $event"
       @update:judgement-mode="state.judgementMode.value = $event"
+      @update:warmup-measures="state.warmupMeasures.value = $event"
+      @update:recording-measures="state.recordingMeasures.value = $event"
       @select-measure="state.selectedMeasureIndex.value = $event"
       @update-rhythm="state.updateBeatRhythm"
       @add-measure="state.addMeasure"
@@ -468,7 +779,13 @@ onBeforeUnmount(() => {
       :is-running="state.isRunning.value"
     />
 
-    <ReportPanel :report="report" :judgement-profile="state.judgementProfile.value" :judgement-label="judgementLabel" />
+    <ReportPanel
+      :report="report"
+      :judgement-profile="state.judgementProfile.value"
+      :judgement-label="judgementLabel"
+      :recording-measures="state.recordingMeasures.value"
+      :analyzed-latency-ms="analyzedLatencyMs"
+    />
   </main>
 </template>
 
