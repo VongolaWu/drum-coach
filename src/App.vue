@@ -37,6 +37,8 @@ const recordingEndTime = ref(0);
 const sessionStopTimeoutId = ref(null);
 const analyzedExpectedCount = ref(0);
 const analyzedLatencyMs = ref(null);
+const analyzedMeasures = ref([]);
+const analyzedNoteVisualStates = ref({});
 
 const thresholdPercent = computed({
   get: () => Math.round(state.amplitudeThreshold.value * 100),
@@ -64,6 +66,10 @@ const expectedNoteCount = computed(() => {
 });
 
 const displayedExpectedNoteCount = computed(() => (state.isRunning.value ? expectedNoteCount.value : analyzedExpectedCount.value));
+
+const displayedMeasures = computed(() => (state.isRunning.value || !analyzedMeasures.value.length ? state.measures.value : analyzedMeasures.value));
+
+const displayedNoteVisualStates = computed(() => (state.isRunning.value ? state.noteVisualStates : analyzedNoteVisualStates.value));
 
 const report = computed(() => {
   const records = state.userHitRecords.value;
@@ -95,6 +101,84 @@ const report = computed(() => {
     avg: aligned ? Math.round(totalOffset / aligned) : null,
     accuracy: expected ? Math.round((scored / expected) * 100) : null
   };
+});
+
+const measureSummaries = computed(() => {
+  if (!analyzedMeasures.value.length) return [];
+
+  const summaries = analyzedMeasures.value.map((measure, index) => ({
+    measureNumber: index + 1,
+    expected: 0,
+    aligned: 0,
+    perfect: 0,
+    good: 0,
+    miss: 0,
+    avgOffset: null
+  }));
+  const offsetTotals = analyzedMeasures.value.map(() => 0);
+  const expectedNotes = getExpectedNotesInWindow(recordingStartTime.value, recordingEndTime.value);
+
+  expectedNotes.forEach((note) => {
+    if (summaries[note.measureIndex]) summaries[note.measureIndex].expected += 1;
+  });
+
+  state.userHitRecords.value.forEach((record) => {
+    const summary = summaries[record.measureIndex];
+    if (!summary) return;
+
+    summary.aligned += 1;
+    offsetTotals[record.measureIndex] += Math.abs(record.offset);
+    if (record.rating === 'perfect') summary.perfect += 1;
+    else if (record.rating === 'good') summary.good += 1;
+    else summary.miss += 1;
+  });
+
+  summaries.forEach((summary, index) => {
+    if (summary.aligned) {
+      summary.avgOffset = Math.round(offsetTotals[index] / summary.aligned);
+    }
+  });
+
+  return summaries;
+});
+
+const coachingSummary = computed(() => {
+  if (!state.userHitRecords.value.length || !measureSummaries.value.length) {
+    return ['完成录音后，这里会给出按小节整理的练习建议。'];
+  }
+
+  const messages = [];
+  const avgSignedOffset =
+    Math.round(state.userHitRecords.value.reduce((sum, record) => sum + record.offset, 0) / state.userHitRecords.value.length);
+
+  if (avgSignedOffset <= -20) {
+    messages.push('整体偏快。先把击打重心往拍点后面放一点，尤其注意起拍不要抢。');
+  } else if (avgSignedOffset >= 20) {
+    messages.push('整体偏慢。可以把注意力放在节拍器前沿，提前准备落槌。');
+  } else {
+    messages.push('整体时值中心基本稳定，可以优先提升连续小节之间的一致性。');
+  }
+
+  const weakestMeasure = measureSummaries.value.reduce((worst, current) => {
+    const currentRate = current.expected ? (current.perfect + current.good) / current.expected : 0;
+    const worstRate = worst.expected ? (worst.perfect + worst.good) / worst.expected : 0;
+    return currentRate < worstRate ? current : worst;
+  }, measureSummaries.value[0]);
+
+  if (weakestMeasure && weakestMeasure.expected) {
+    messages.push(
+      `第 ${weakestMeasure.measureNumber} 小节最不稳定。建议单独循环这一小节，先把每拍打匀，再回到完整录音。`
+    );
+  }
+
+  const highMissMeasures = measureSummaries.value.filter((summary) => summary.expected && summary.miss / summary.expected >= 0.3);
+  if (highMissMeasures.length) {
+    messages.push(`有 ${highMissMeasures.length} 个小节的大偏差较多，建议先降 BPM 5 到 10 再练。`);
+  } else {
+    messages.push('大偏差不多，下一步可以保持 BPM 不变，优先把 Perfect 比例提上去。');
+  }
+
+  return messages;
 });
 
 function getPlayheadState(time) {
@@ -179,9 +263,25 @@ function getSequenceDurationSec() {
   return getMeasureDurationSec() * state.measures.value.length;
 }
 
+function buildAnalyzedMeasures() {
+  const baseMeasures = state.measures.value;
+  if (!baseMeasures.length) return [];
+
+  const startMeasureOffset = baseMeasures.length ? state.warmupMeasures.value % baseMeasures.length : 0;
+
+  return Array.from({ length: state.recordingMeasures.value }, (_, index) => {
+    const sourceMeasure = baseMeasures[(startMeasureOffset + index) % baseMeasures.length];
+    return {
+      id: `analysis-${index + 1}`,
+      rhythms: [...sourceMeasure.rhythms]
+    };
+  });
+}
+
 function getExpectedNotesInWindow(windowStartTime, windowEndTime) {
   const sequenceDuration = getSequenceDurationSec();
   if (!sequenceDuration || !state.flatSequenceNotes.value.length) return [];
+  const measureDuration = getMeasureDurationSec();
 
   const firstCycleIndex = Math.floor((windowStartTime - sequenceStartAudioTime.value) / sequenceDuration) - 1;
   const lastCycleIndex = Math.ceil((windowEndTime - sequenceStartAudioTime.value) / sequenceDuration) + 1;
@@ -193,13 +293,16 @@ function getExpectedNotesInWindow(windowStartTime, windowEndTime) {
 
       const absoluteTime = sequenceStartAudioTime.value + cycleIndex * sequenceDuration + note.offsetFromSeqStart;
       if (absoluteTime < windowStartTime || absoluteTime >= windowEndTime) return;
+      const recordedMeasureIndex = Math.floor((absoluteTime - windowStartTime) / measureDuration);
+      const displayNoteId = `${recordedMeasureIndex}-${note.beatIndex}-${note.subIndex}`;
 
       notes.push({
         key: `${cycleIndex}:${note.uniqueId}`,
         cycleIndex,
         noteId: note.uniqueId,
+        displayNoteId,
         absoluteTime,
-        measureIndex: note.measureIndex,
+        measureIndex: recordedMeasureIndex,
         beatIndex: note.beatIndex,
         subIndex: note.subIndex
       });
@@ -255,7 +358,10 @@ function evaluateHitAlignment(rawHits, expectedNotes, latencyMs) {
       offset: best.diffMs,
       rating,
       cycleIndex: best.note.cycleIndex,
-      noteId: best.note.noteId
+      noteId: best.note.displayNoteId,
+      measureIndex: best.note.measureIndex,
+      beatIndex: best.note.beatIndex,
+      subIndex: best.note.subIndex
     });
   });
 
@@ -273,6 +379,8 @@ function evaluateHitAlignment(rawHits, expectedNotes, latencyMs) {
 function analyzeRecordedSession() {
   const expectedNotes = getExpectedNotesInWindow(recordingStartTime.value, recordingEndTime.value);
   analyzedExpectedCount.value = expectedNotes.length;
+  analyzedMeasures.value = buildAnalyzedMeasures();
+  analyzedNoteVisualStates.value = {};
   state.userHitRecords.value = [];
   ignoredHitCount.value = 0;
   analyzedLatencyMs.value = null;
@@ -320,7 +428,7 @@ function analyzeRecordedSession() {
   state.userHitRecords.value = bestResult.records;
 
   bestResult.records.forEach((record) => {
-    state.noteVisualStates[record.noteId] = {
+    analyzedNoteVisualStates.value[record.noteId] = {
       status: record.rating,
       offset: record.offset,
       timestamp: record.time
@@ -334,7 +442,7 @@ function analyzeRecordedSession() {
 function processLiveDrumHit(hitTime) {
   if (!state.isRunning.value) return;
 
-  const withinRecordingWindow = hitTime >= recordingStartTime.value && hitTime <= recordingEndTime.value;
+  const withinRecordingWindow = hitTime >= sequenceStartAudioTime.value && hitTime <= recordingEndTime.value;
 
   if (!withinRecordingWindow) return;
 
@@ -659,6 +767,8 @@ async function toggleRun() {
     ignoredHitCount.value = 0;
     analyzedExpectedCount.value = 0;
     analyzedLatencyMs.value = null;
+    analyzedMeasures.value = [];
+    analyzedNoteVisualStates.value = {};
     sessionElapsedSec.value = 0;
     realtimeFeedback.value = '节拍器已同步，热身结束后开始录音。';
     offsetMs.value = null;
@@ -773,8 +883,8 @@ onBeforeUnmount(() => {
     <StaffCanvas
       :bpm="state.bpm.value"
       :geometry="state.geometry"
-      :measures="state.measures.value"
-      :note-visual-states="state.noteVisualStates"
+      :measures="displayedMeasures"
+      :note-visual-states="displayedNoteVisualStates"
       :active-playhead="activePlayhead"
       :is-running="state.isRunning.value"
     />
@@ -785,6 +895,8 @@ onBeforeUnmount(() => {
       :judgement-label="judgementLabel"
       :recording-measures="state.recordingMeasures.value"
       :analyzed-latency-ms="analyzedLatencyMs"
+      :measure-summaries="measureSummaries"
+      :coaching-summary="coachingSummary"
     />
   </main>
 </template>

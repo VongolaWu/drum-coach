@@ -19,6 +19,14 @@ defineProps({
   analyzedLatencyMs: {
     type: Number,
     default: null
+  },
+  measureSummaries: {
+    type: Array,
+    required: true
+  },
+  coachingSummary: {
+    type: Array,
+    required: true
   }
 });
 
@@ -55,6 +63,25 @@ const legendItems = [
       <div><span>Good</span><strong class="mono">{{ report.good }}</strong></div>
       <div><span>偏差较大</span><strong class="mono">{{ report.miss }}</strong></div>
       <div><span>平均偏差</span><strong class="mono">{{ report.avg == null ? '-- ms' : `${report.avg} ms` }}</strong></div>
+    </div>
+
+    <div v-if="measureSummaries.length" class="measure-summary">
+      <div class="card-title">逐小节情况</div>
+      <div class="measure-summary-grid">
+        <div v-for="summary in measureSummaries" :key="summary.measureNumber" class="measure-summary-card">
+          <strong class="mono">M{{ summary.measureNumber }}</strong>
+          <span>达标 {{ summary.perfect + summary.good }}/{{ summary.expected || 0 }}</span>
+          <span>Perfect {{ summary.perfect }}</span>
+          <span>Good {{ summary.good }}</span>
+          <span>偏差较大 {{ summary.miss }}</span>
+          <span>{{ summary.avgOffset == null ? '平均偏差 -- ms' : `平均偏差 ${summary.avgOffset} ms` }}</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="coaching">
+      <div class="card-title">总结分析</div>
+      <p v-for="(item, index) in coachingSummary" :key="index">{{ item }}</p>
     </div>
 
     <div class="legend">
@@ -144,9 +171,46 @@ const legendItems = [
   line-height: 1.5;
 }
 
+.measure-summary {
+  margin-top: 22px;
+}
+
+.measure-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.measure-summary-card {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(39, 39, 42, 0.68);
+  border: 1px solid rgba(63, 63, 70, 0.7);
+}
+
+.measure-summary-card span {
+  color: #d4d4d8;
+  font-size: 13px;
+}
+
+.coaching {
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(63, 63, 70, 0.7);
+}
+
+.coaching p {
+  margin: 10px 0 0;
+  color: #d4d4d8;
+  line-height: 1.6;
+}
+
 @media (max-width: 900px) {
   .report-grid,
-  .legend {
+  .legend,
+  .measure-summary-grid {
     grid-template-columns: 1fr;
   }
 }
